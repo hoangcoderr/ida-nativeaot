@@ -36,7 +36,6 @@
       "decompiler",
       "frozen-objects",
       "ghidra-port",
-      "washi",
       "ida-9",
       "pyside6"
     ]
