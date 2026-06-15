@@ -6,6 +6,10 @@
 [![IDA Pro](https://img.shields.io/badge/IDA%20Pro-9.2%2B-orange)](https://hex-rays.com/ida-pro/)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
+<p align="center">
+  <img src="Media/ida-nativeaot_Overview.png" alt="NativeAOT Metadata Browser - Overview tab" width="900">
+</p>
+
 A two-file IDA Pro plugin that reverse-engineers **.NET Native AOT** binaries (.NET 7/8/9/10).
 These ship with stripped symbols, so IDA shows thousands of unnamed `sub_*` functions. The plugin
 parses the runtime's **ReadyToRun** metadata to rebuild the .NET type system, name the code, and
@@ -59,7 +63,25 @@ IDA; right-click to copy or rename; type kinds have colour icons.
 
 **Live sync** — the browser tracks IDA renames (manual, **FLIRT**, **Lumina**) and updates itself
 automatically; **↻ Refresh names** forces a re-read. Right-click **Rename type (propagate)** renames
-a class *and* its methods (`Old::M` → `New::M`) without clobbering FLIRT/user-given names.
+a class *and* its methods (`Old::M` → `New::M`) without clobbering FLIRT/user-given names. Type and
+method names are shown in full and demangled, mirroring any symbols already applied to the database
+(e.g. from a PDB).
+
+### Screenshots
+
+*Sample: a NativeAOT build of `FlirtCoverage.dll` (.NET 8) with its PDB applied. The Overview tab is shown at the top of this page.*
+
+**Type Hierarchy** - the `System.IO.FileStream` inheritance chain with the per-type detail pane (base type, interfaces, vtable slots). Names are full and demangled, straight from the applied PDB.
+
+![Type Hierarchy tab](Media/ida-nativeaot_TypeHierarchy.png)
+
+**Methods** - filtering on `canWrite` lands on `FileStream::get_CanWrite`, slot 4 of `System.IO.Stream`.
+
+![Methods tab](Media/ida-nativeaot_Methods.png)
+
+**Strings** - a recovered frozen literal (`ws://127.0.0.1:0/`) and how it reads inline in the Hex-Rays pseudocode as a `dn_…` label.
+
+![Strings tab](Media/ida-nativeaot_Strings.png)
 
 ---
 
