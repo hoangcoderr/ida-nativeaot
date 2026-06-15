@@ -1,7 +1,7 @@
 r"""
-nativeaot_browser.py - IDA Pro plugin: .NET Native AOT Metadata Browser
+ida-nativeaot_browser.py - IDA Pro plugin: .NET Native AOT Metadata Browser
 
-A PySide6 GUI front-end for the Native AOT analyzer (nativeaot_ida.py). It runs
+A PySide6 GUI front-end for the Native AOT analyzer (ida-nativeaot.py). It runs
 the analysis (RTR location, rehydration, MethodTable reconstruction, frozen
 object annotation) and presents the recovered metadata in a rich, navigable
 dockable window with multiple tabs:
@@ -15,7 +15,7 @@ dockable window with multiple tabs:
 Double-click any row/node to jump to it in IDA. A toolbar lets you (re)run the
 analysis and refresh the views.
 
-Install: copy BOTH nativeaot_browser.py and nativeaot_ida.py into your IDA
+Install: copy BOTH ida-nativeaot_browser.py and ida-nativeaot.py into your IDA
 plugins directory (e.g. %APPDATA%\Hex-Rays\IDA Pro\plugins or <IDADIR>/plugins).
 Invoke via Edit > Plugins > "NativeAOT Metadata Browser" or the hotkey
 Ctrl-Shift-N.
@@ -52,22 +52,22 @@ def load_engine():
     if _ENGINE is not None:
         return _ENGINE
     here = os.path.dirname(os.path.abspath(__file__))
-    # 1) normal import
-    try:
-        import nativeaot_ida as eng
+    # 1) reuse the engine if it was already loaded this session
+    eng = sys.modules.get("nativeaot_engine")
+    if eng is not None:
         _ENGINE = eng
         return eng
-    except Exception:
-        pass
-    # 2) explicit path load from the plugin's own directory
-    path = os.path.join(here, "nativeaot_ida.py")
+    # 2) explicit path load from the plugin's own directory. The engine file
+    #    name contains a hyphen (ida-nativeaot.py), which is not a valid Python
+    #    module identifier, so it must be loaded by path rather than `import`.
+    path = os.path.join(here, "ida-nativeaot.py")
     if not os.path.isfile(path):
         raise RuntimeError(
-            "nativeaot_ida.py not found next to the plugin (%s). "
+            "ida-nativeaot.py not found next to the plugin (%s). "
             "Copy it into the same directory." % here)
-    spec = importlib.util.spec_from_file_location("nativeaot_ida", path)
+    spec = importlib.util.spec_from_file_location("nativeaot_engine", path)
     eng = importlib.util.module_from_spec(spec)
-    sys.modules["nativeaot_ida"] = eng
+    sys.modules["nativeaot_engine"] = eng
     spec.loader.exec_module(eng)
     _ENGINE = eng
     return eng
@@ -94,6 +94,91 @@ RTR_SECTION_NAMES = {
     333: "StaticsInfoHashtable", 334: "ReflectionInvokeMap",
     335: "ClassConstructorContextMap", 336: "EmbeddedMetadata",
 }
+
+
+def best_symbol_name(ea):
+    """Best human-readable name IDA has for `ea`.
+
+    A function's name when `ea` is a function, otherwise any label IDA already
+    has at the address (user-given, PDB/DWARF, or auto-generated), falling back
+    to a synthesized `sub_<ea>` only when the address is truly unnamed.
+
+    This matters because NativeAOT vtable slots are not all method-code
+    pointers: for generic types a slot can point at runtime *data* such as a
+    generic dictionary (`__GenericDict_*`). Those have a real name but no
+    function, so reading only `ida_funcs.get_func_name` would miss it and we
+    must consult `ida_name.get_name` before giving up.
+    """
+    if ida_funcs.get_func(ea):
+        nm = ida_funcs.get_func_name(ea)
+        if nm:
+            return nm
+    nm = ida_name.get_name(ea)
+    return nm if nm else ("sub_%X" % ea)
+
+
+def ida_display_name(ea, raw):
+    """IDA's full, decorated (demangled) display name for `ea`.
+
+    Returns the name exactly as IDA would show it - demangled and untrimmed - so
+    a PDB vftable symbol like ``??_7X@@6B@`` is shown as ``const X::`vftable'``
+    rather than a sanitized, 64-char-truncated ``___7X_...``. Falls back to the
+    raw stored name if demangling is unavailable.
+    """
+    gn = (getattr(ida_name, "GN_VISIBLE", 0) | getattr(ida_name, "GN_DEMANGLED", 0)
+          | getattr(ida_name, "GN_LONG", 0))
+    try:
+        vis = ida_name.get_ea_name(ea, gn)
+        if vis:
+            return vis
+    except Exception:
+        pass
+    try:
+        dem = ida_name.demangle_name(raw, 0)
+        if dem:
+            return dem
+    except Exception:
+        pass
+    return raw
+
+
+def best_type_name(engine, mt):
+    """Name to display for a type.
+
+    Prefers the full, decorated name IDA currently has at the MethodTable address
+    (PDB/DWARF or user-given), so the browser mirrors symbols applied to the
+    database - including a PDB loaded *after* the analyzer ran - in full and
+    decorated form. Falls back to the engine's class name (itself PDB-derived
+    when the symbol was present at analysis time).
+
+    `engine` may be None or a stub lacking these helpers (e.g. in tests); in that
+    case we simply return the engine name.
+    """
+    try:
+        live = engine.existing_symbol_name(mt.address)
+        if live:
+            return ida_display_name(mt.address, live)
+    except Exception:
+        pass
+    return mt.name()
+
+
+def rtr_layout_label(runtime):
+    """Human label for the metadata layout the analyzer used. The "net70" path
+    handles .NET 7 (RTR major <= 8); "net80" handles .NET 8/9/10 (major >= 9)."""
+    return ".NET 7 layout" if runtime == "net70" else ".NET 8+ layout"
+
+
+def rtr_dotnet_hint(major):
+    """Best-effort .NET product version for an RTR header major version.
+
+    The RTR/NativeAOT header major version is the metadata *format* version, not
+    the .NET product version, and the two do not track linearly (e.g. .NET 10
+    jumped to 16). Values verified against dotnet/runtime
+    (.../Internal/Runtime/ModuleHeaders.cs CurrentMajorVersion per release branch).
+    Display only; returns None for unknown majors (e.g. unreleased .NET 11 = 22).
+    """
+    return {8: ".NET 7", 9: ".NET 8", 10: ".NET 9", 16: ".NET 10"}.get(major)
 
 
 class BrowserData:
@@ -155,26 +240,29 @@ class BrowserData:
     def children(mt):
         return sorted(mt.derived_types, key=lambda x: x.name().lower())
 
+    def display_name(self, mt):
+        """Type name to show: IDA's live PDB/user name when present, else the
+        engine's class name. Keeps every type view in sync with the database."""
+        return best_type_name(self.engine, mt)
+
     def type_detail(self, mt):
         """Return dict with header info + methods + interfaces for a type."""
         methods = []
         for i, target in enumerate(mt.vtable):
             method = mt.get_method(i)
-            decl = method.chunk.direct_parent.name() if method else mt.name()
-            if target and ida_funcs.get_func(target):
-                fname = ida_funcs.get_func_name(target)
-            elif target:
-                fname = "sub_%X" % target
+            decl = self.display_name(method.chunk.direct_parent) if method else self.display_name(mt)
+            if target:
+                fname = best_symbol_name(target)
             else:
                 fname = "(abstract)"
             methods.append({
                 "slot": i, "name": fname, "ea": target,
-                "decl": decl, "inherited": decl != mt.name(),
+                "decl": decl, "inherited": decl != self.display_name(mt),
             })
-        interfaces = [{"name": i.name(), "ea": i.address} for i in mt.interfaces]
+        interfaces = [{"name": self.display_name(i), "ea": i.address} for i in mt.interfaces]
         return {
-            "name": mt.name(), "kind": mt.kind_str(), "address": mt.address,
-            "base": (mt.related_type.name() if mt.related_type else None),
+            "name": self.display_name(mt), "kind": mt.kind_str(), "address": mt.address,
+            "base": (self.display_name(mt.related_type) if mt.related_type else None),
             "base_ea": (mt.related_type.address if mt.related_type else None),
             "base_size": mt.base_size, "hash": mt.hash_code,
             "vtable_count": len(mt.vtable), "iface_count": len(mt.interface_slots),
@@ -186,8 +274,8 @@ class BrowserData:
         rows = []
         for mt in self.m.method_tables.values():
             rows.append({
-                "ea": mt.address, "name": mt.name(), "kind": mt.kind_str(),
-                "base": mt.related_type.name() if mt.related_type else "",
+                "ea": mt.address, "name": self.display_name(mt), "kind": mt.kind_str(),
+                "base": self.display_name(mt.related_type) if mt.related_type else "",
                 "vt": len(mt.vtable), "if": len(mt.interface_slots),
                 "size": mt.base_size,
             })
@@ -204,11 +292,8 @@ class BrowserData:
                 if target in seen:
                     continue
                 method = mt.get_method(i)
-                decl = method.chunk.direct_parent.name() if method else mt.name()
-                if ida_funcs.get_func(target):
-                    fname = ida_funcs.get_func_name(target)
-                else:
-                    fname = "sub_%X" % target
+                decl = self.display_name(method.chunk.direct_parent) if method else self.display_name(mt)
+                fname = best_symbol_name(target)
                 seen[target] = {"ea": target, "name": fname, "owner": decl, "slot": i}
         return list(seen.values())
 
@@ -217,11 +302,33 @@ class BrowserData:
     def string_rows(self):
         return list(self.m.report_strings)
 
+    def _type_name_at(self, addr, fallback):
+        """Resolve a type's current display name from its MT address (so frozen
+        rows reflect PDB/user names too), falling back to the cached string."""
+        mt = self.m.get(addr) if addr else None
+        return self.display_name(mt) if mt is not None else fallback
+
     def array_rows(self):
-        return list(self.m.report_arrays)
+        rows = []
+        for a in self.m.report_arrays:
+            rows.append({
+                "ea": a["ea"],
+                "mt": self._type_name_at(a.get("mt_addr"), a["mt"]),
+                "length": a["length"],
+                "elem": self._type_name_at(a.get("elem_addr"), a["elem"]),
+                "mt_addr": a["mt_addr"],
+            })
+        return rows
 
     def object_rows(self):
-        return list(self.m.report_objects)
+        rows = []
+        for o in self.m.report_objects:
+            rows.append({
+                "ea": o["ea"],
+                "mt": self._type_name_at(o.get("mt_addr"), o["mt"]),
+                "mt_addr": o["mt_addr"],
+            })
+        return rows
 
 
 # ===========================================================================
@@ -314,6 +421,16 @@ def build_browser_widget(parent, data):
     Qt = QtCore.Qt
 
     HEX = lambda v: ("%#x" % v) if isinstance(v, int) else str(v)
+
+    # Engine handle for live type-name resolution (PDB/user names). Tolerates a
+    # missing/stub engine (tests) by falling back to mt.name() inside disp().
+    try:
+        _eng = load_engine()
+    except Exception:
+        _eng = None
+
+    def disp(mt):
+        return best_type_name(_eng, mt)
 
     # ---- Theme-agnostic polish ----------------------------------------
     # We deliberately do NOT hardcode background/foreground colors, so the
@@ -496,10 +613,11 @@ def build_browser_widget(parent, data):
     toolbar = QtWidgets.QHBoxLayout()
     ov = data.overview()
     title = QtWidgets.QLabel(
-        "<b>NativeAOT</b>  RTR @ %s  v%d.%d (%s)  |  %d types  |  %d methods  |  "
+        "<b>NativeAOT</b>  RTR @ %s  fmt v%d.%d (%s)  |  %d types  |  %d methods  |  "
         "%d strings" % (
             HEX(ov["rtr_address"]), ov["version"][0], ov["version"][1],
-            ov["runtime"], ov["total_types"], ov["methods_renamed"], ov["n_strings"]))
+            rtr_layout_label(ov["runtime"]), ov["total_types"],
+            ov["methods_renamed"], ov["n_strings"]))
     toolbar.addWidget(title)
     toolbar.addStretch(1)
     btn_refresh = QtWidgets.QPushButton("↻ Refresh names", parent)
@@ -526,22 +644,30 @@ def build_browser_widget(parent, data):
     info.document().setDefaultStyleSheet(DOC_CSS)
     dist = ov["kind_dist"]
     dist_html = ", ".join("%s: %d" % (k, v) for k, v in sorted(dist.items(), key=lambda x: -x[1]))
+    _layout = rtr_layout_label(ov["runtime"])
+    _hint = rtr_dotnet_hint(ov["version"][0])
+    _hint_html = ("&nbsp;- likely %s" % _hint) if _hint else ""
     info.setHtml(
         "<h2>.NET Native AOT</h2>"
         "<table cellpadding=4>"
         "<tr><td><b>ReadyToRun header</b></td><td>%s</td></tr>"
-        "<tr><td><b>Version</b></td><td>%d.%d (%s manager)</td></tr>"
+        "<tr><td><b>ReadyToRun format</b></td><td>v%d.%d &nbsp;(%s)%s</td></tr>"
         "<tr><td><b>RTR sections</b></td><td>%d</td></tr>"
         "<tr><td><b>System.Object MT</b></td><td>%s</td></tr>"
         "<tr><td><b>System.String MT</b></td><td>%s</td></tr>"
         "<tr><td><b>Method tables</b></td><td>%d</td></tr>"
-        "<tr><td><b>Virtual methods named</b></td><td>%d</td></tr>"
+        "<tr><td><b>Virtual methods named (by analyzer)</b></td><td>%d</td></tr>"
         "<tr><td><b>Frozen strings</b></td><td>%d</td></tr>"
         "<tr><td><b>Frozen arrays</b></td><td>%d</td></tr>"
         "<tr><td><b>Frozen boxed objects</b></td><td>%d</td></tr>"
         "</table>"
+        "<p style='color:#888'>ReadyToRun format is the metadata format version, "
+        "not the .NET product version (they do not track linearly). "
+        "\"Virtual methods named (by analyzer)\" counts only methods the analyzer "
+        "renamed; methods that already had symbols (e.g. from a PDB) are left "
+        "untouched and not counted.</p>"
         "<p><b>Type kinds:</b> %s</p>" % (
-            HEX(ov["rtr_address"]), ov["version"][0], ov["version"][1], ov["runtime"],
+            HEX(ov["rtr_address"]), ov["version"][0], ov["version"][1], _layout, _hint_html,
             ov["sections"], HEX(ov["object_mt"]), HEX(ov["string_mt"]),
             ov["total_types"], ov["methods_renamed"], ov["n_strings"],
             ov["n_arrays"], ov["n_objects"], dist_html))
@@ -580,7 +706,7 @@ def build_browser_widget(parent, data):
     LAZY = "__lazy__"
 
     def make_tree_item(mt):
-        it = QtWidgets.QTreeWidgetItem([mt.name(), mt.kind_str(), "%#x" % mt.address])
+        it = QtWidgets.QTreeWidgetItem([disp(mt), mt.kind_str(), "%#x" % mt.address])
         it.setData(0, Qt.UserRole, mt.address)
         it.setData(0, Qt.UserRole + 1, mt)
         it.setIcon(0, kind_icon(mt.kind_str()))
@@ -593,12 +719,16 @@ def build_browser_widget(parent, data):
     for root_mt in data.roots():
         tree.addTopLevelItem(make_tree_item(root_mt))
 
-    def on_expand(item):
+    def materialize(item):
+        # Replace a lazy placeholder with the node's real children (idempotent).
         if item.childCount() == 1 and item.child(0).text(0) == LAZY:
             item.removeChild(item.child(0))
             mt = item.data(0, Qt.UserRole + 1)
             for ch in data.children(mt):
                 item.addChild(make_tree_item(ch))
+
+    def on_expand(item):
+        materialize(item)
     tree.itemExpanded.connect(on_expand)
 
     # right: detail
@@ -714,23 +844,53 @@ def build_browser_widget(parent, data):
                 pass
     detail.anchorClicked.connect(on_detail_anchor)
 
+    # The tree is lazily populated (a collapsed node holds only a placeholder),
+    # so a plain walk would never see types inside collapsed branches. Before
+    # searching we materialize the whole tree once; matches are then revealed by
+    # expanding their ancestors. Clearing the search restores the collapsed view.
+    _tree_materialized = [False]
+
+    def materialize_all():
+        if _tree_materialized[0]:
+            return
+        stack = [tree.topLevelItem(i) for i in range(tree.topLevelItemCount())]
+        while stack:
+            it = stack.pop()
+            materialize(it)
+            for i in range(it.childCount()):
+                ch = it.child(i)
+                if ch.text(0) != LAZY:
+                    stack.append(ch)
+        _tree_materialized[0] = True
+
     def on_tree_search(txt):
         txt = txt.lower().strip()
-        # iterate top-level (and expand matches lazily is complex; do a flat search
-        # by matching visible items; expand all-on-search is heavy, so match names)
+        if txt:
+            materialize_all()
+
         def walk(item):
-            name = item.text(0).lower()
-            hit = txt in name if txt else True
+            if item.text(0) == LAZY:
+                item.setHidden(True)
+                return False
+            # Match against every column (Type, Kind, Address), substring + ci,
+            # so the tree behaves like the table filters.
+            if txt:
+                hit = any(txt in item.text(c).lower()
+                          for c in range(item.columnCount()))
+            else:
+                hit = True
             child_hit = False
             for i in range(item.childCount()):
-                ch = item.child(i)
-                if ch.text(0) == LAZY:
-                    continue
-                child_hit = walk(ch) or child_hit
+                child_hit = walk(item.child(i)) or child_hit
             item.setHidden(bool(txt) and not hit and not child_hit)
+            if txt and child_hit:
+                item.setExpanded(True)
             return hit or child_hit
+
         for i in range(tree.topLevelItemCount()):
             walk(tree.topLevelItem(i))
+        if not txt:
+            tree.collapseAll()
     tree_search.textChanged.connect(on_tree_search)
 
     # ===================== Methods tab =====================
@@ -809,7 +969,7 @@ def build_browser_widget(parent, data):
 
     # ===================== live name synchronisation =====================
     def _live_func_name(ea):
-        return ida_funcs.get_func_name(ea) or ("sub_%X" % ea)
+        return best_symbol_name(ea)
 
     def _refresh_one(ea):
         try:
@@ -824,10 +984,10 @@ def build_browser_widget(parent, data):
             ti = type_name_items.get(ea)
             mt = data.m.get(ea)
             if ti is not None and mt is not None:
-                ti.setText(mt.name())
+                ti.setText(disp(mt))
             for node in tree_items_by_ea.get(ea, ()):
                 if mt is not None:
-                    node.setText(0, mt.name())
+                    node.setText(0, disp(mt))
         except RuntimeError:
             pass  # widget already destroyed
 

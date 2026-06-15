@@ -1,5 +1,5 @@
 """
-nativeaot_ida.py - .NET Native AOT metadata reconstruction for IDA Pro 9.2+
+ida-nativeaot.py - .NET Native AOT metadata reconstruction for IDA Pro 9.2+
 
 A single-file IDAPython port of the Ghidra "ghidra-nativeaot" plugin by Washi
 (https://github.com/washi1337/ghidra-nativeaot ;
@@ -24,8 +24,8 @@ Target: IDA Pro 9.2+ (IDAPython; developed and tested on 9.3). Also runs under
 idalib (headless). Only x86-64 little-endian binaries are supported (as in the
 original plugin).
 
-Run inside IDA:   File > Script file... > nativeaot_ida.py
-Run headless:     idat64 -A -S"nativeaot_ida.py" target.i64
+Run inside IDA:   File > Script file... > ida-nativeaot.py
+Run headless:     idat64 -A -S"ida-nativeaot.py" target.i64
 
 Behaviour can be tuned with NAOT_* environment variables (see Config).
 """
@@ -33,6 +33,7 @@ Behaviour can be tuned with NAOT_* environment variables (see Config).
 from __future__ import annotations
 
 import os
+import re
 import json
 import zlib
 import struct
@@ -359,6 +360,65 @@ def sanitize_ident(s, maxlen=64):
     if len(r) > maxlen:
         r = r[:maxlen]
     return r or "_"
+
+
+# Our own auto-generated type labels (Class_<hex>, Struct_<hex>, Enum_Int32_<hex>...).
+_DEFAULT_LABEL_RE = re.compile(
+    r"^(Class|Struct|Nullable|IInterface|Array|SzArray|Type|Enum_[A-Za-z0-9]+)"
+    r"_[0-9A-Fa-f]+$")
+
+
+def is_default_label(name):
+    """True if `name` is empty or one of our auto-generated type labels.
+
+    A trailing "_MT" (the MethodTable label suffix) is ignored, so both
+    "Class_18047c560" and "Class_18047c560_MT" are recognized as default.
+    """
+    if not name:
+        return True
+    if name.endswith("_MT"):
+        name = name[:-3]
+    return bool(_DEFAULT_LABEL_RE.match(name))
+
+
+def existing_symbol_name(ea):
+    """Return a meaningful, externally-provided name already at `ea`, else None.
+
+    "Meaningful" means a user-given, PDB/DWARF, or Lumina name. Returns None when
+    the address is unnamed, carries only an auto-generated dummy name (sub_/off_/
+    unk_/byte_/...), or carries one of our own default labels (which we are free
+    to replace). This is what lets the analyzer mirror - and never clobber -
+    symbols a PDB or the user already provided.
+    """
+    try:
+        name = ida_name.get_name(ea) or ""
+    except Exception:
+        return None
+    if is_default_label(name):
+        return None
+    try:
+        flags = ida_bytes.get_full_flags(ea)
+    except Exception:
+        return None
+    if ida_bytes.has_dummy_name(flags) or ida_bytes.has_auto_name(flags):
+        return None
+    return name
+
+
+def class_name_from_symbol(sym):
+    """Derive a clean class identifier from an existing PDB/user symbol.
+
+    NativeAOT PDBs label the MethodTable with the type's vftable symbol, so a
+    trailing vftable decoration is stripped to recover the type name itself.
+    """
+    s = sym or ""
+    if s.endswith("_MT"):
+        s = s[:-3]
+    for suf in ("::`vftable'", "::`vftable`", "::vftable", "__vftable_", "__vftable"):
+        if s.endswith(suf):
+            s = s[:-len(suf)]
+            break
+    return sanitize_ident(s)
 
 
 def make_string_label_text(s, maxlen=56):
@@ -828,6 +888,18 @@ class MethodTable:
         }
         return (table.get(et, "Type_%s")) % addr
 
+    def preferred_default_name(self):
+        """Initial class name: derived from a PDB/user symbol already at the
+        MethodTable address when present, otherwise the generated default. This
+        mirrors existing names instead of overwriting them with Class_<addr>.
+        """
+        sym = existing_symbol_name(self.address)
+        if sym:
+            derived = class_name_from_symbol(sym)
+            if derived and not is_default_label(derived):
+                return derived
+        return self.default_name()
+
     def set_class_name(self, name):
         self._class_name = name
 
@@ -1015,7 +1087,10 @@ class MethodTable:
         except Exception as ex:
             Log.debug("instance type failed @ %#x: %s" % (self.address, ex))
         # primary label at the method table (acts like the Ghidra `vftable').
-        set_name_safe(self.address, "%s_MT" % self.name())
+        # Never clobber a name a PDB or the user already placed here; only label
+        # addresses that are unnamed or carry our own default.
+        if existing_symbol_name(self.address) is None:
+            set_name_safe(self.address, "%s_MT" % self.name())
 
     def rename(self, new_name, propagate_methods=True):
         """Rename the MT type, instance type, own vtbl chunk and label.
@@ -1071,6 +1146,12 @@ class MethodTable:
 class MethodTableManager:
     def __init__(self, major_version):
         self.major_version = major_version
+        # RTR header CurrentMajorVersion per .NET release (verified against
+        # dotnet/runtime .../Internal/Runtime/ModuleHeaders.cs):
+        #   .NET 7 -> 8, .NET 8 -> 9, .NET 9 -> 10, .NET 10 -> 16, .NET 11 -> 22.
+        # The "dehydrated metadata" format arrived in .NET 8 (major >= 9), so the
+        # net70 (pre-dehydration) vs net80 split is the 8/9 boundary; any future
+        # major (>= 9) correctly uses the net80 path.
         self.is_net70 = major_version <= 0x08
         self.method_tables = {}
         self.object_mt = None
@@ -1079,7 +1160,7 @@ class MethodTableManager:
         self.directory = None
         self.rtr_address = None
         self.report_strings = []   # {ea, label, text, length}
-        self.report_arrays = []    # {ea, mt, mt_addr, length, elem}
+        self.report_arrays = []    # {ea, mt, mt_addr, length, elem, elem_addr}
         self.report_objects = []   # {ea, mt, mt_addr}
         self.stats = {}
 
@@ -1198,7 +1279,7 @@ class MethodTableCrawler:
         if mt is None:
             mt = self.manager.create_mt(address)
             mt.init_from_memory()   # may raise -> invalid MT
-            mt.set_class_name(mt.default_name())
+            mt.set_class_name(mt.preferred_default_name())
             self.manager.register(mt)
         return mt
 
@@ -1470,7 +1551,8 @@ class FrozenObjectAnnotator:
                 self._apply_array(data_start, element_type, length)
             self.manager.report_arrays.append({
                 "ea": loc, "mt": mt.name(), "mt_addr": mt.address,
-                "length": length, "elem": element_type.name()})
+                "length": length, "elem": element_type.name(),
+                "elem_addr": element_type.address})
             return True
         except Exception as ex:
             Log.debug("szarray annotation failed @ %#x: %s" % (loc, ex))

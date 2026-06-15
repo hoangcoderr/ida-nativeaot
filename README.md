@@ -70,26 +70,26 @@ engine from the same folder):
 
 **Per-user (recommended — survives IDA reinstalls):**
 ```
-%APPDATA%\Hex-Rays\IDA Pro\plugins\nativeaot_browser.py
-%APPDATA%\Hex-Rays\IDA Pro\plugins\nativeaot_ida.py
+%APPDATA%\Hex-Rays\IDA Pro\plugins\ida-nativeaot_browser.py
+%APPDATA%\Hex-Rays\IDA Pro\plugins\ida-nativeaot.py
 ```
 
 **System-wide:**
 ```
-<IDA_DIR>\plugins\nativeaot_browser.py
-<IDA_DIR>\plugins\nativeaot_ida.py
+<IDA_DIR>\plugins\ida-nativeaot_browser.py
+<IDA_DIR>\plugins\ida-nativeaot.py
 ```
 
 Restart IDA, then open via **`Edit → Plugins → NativeAOT Metadata Browser`** or **`Ctrl-Shift-N`**.
 The first run analyzes and caches the metadata into the IDB; subsequent opens are instant.
 
-> `nativeaot_ida.py` is the analysis engine and can also be run standalone, without the GUI, via
-> **`File → Script file…`** or headless: `idat64 -A -S"nativeaot_ida.py" target.i64`.
+> `ida-nativeaot.py` is the analysis engine and can also be run standalone, without the GUI, via
+> **`File → Script file…`** or headless: `idat64 -A -S"ida-nativeaot.py" target.i64`.
 
 ### IDA Plugin Manager (HCLI)
 
-The plugin ships an `ida-plugin.json`. This is a two-file plugin — `nativeaot_browser.py` is the
-`entryPoint` and `nativeaot_ida.py` is a helper module it imports — and the Plugin Manager installs
+The plugin ships an `ida-plugin.json`. This is a two-file plugin - `ida-nativeaot_browser.py` is the
+`entryPoint` and `ida-nativeaot.py` is a helper module it imports - and the Plugin Manager installs
 **both** files together (it extracts the whole plugin directory, not just the entry point). Once
 published to plugins.hex-rays.com, install with:
 
