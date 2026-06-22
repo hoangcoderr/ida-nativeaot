@@ -3,7 +3,7 @@
 > **Recover .NET Native AOT metadata in IDA Pro — type hierarchy, virtual methods, and string literals from symbol-stripped binaries.**
 
 [![Python 3](https://img.shields.io/badge/Python-3.x-blue?logo=python&logoColor=white)](https://www.python.org/)
-[![IDA Pro](https://img.shields.io/badge/IDA%20Pro-9.2%2B-orange)](https://hex-rays.com/ida-pro/)
+[![IDA Pro](https://img.shields.io/badge/IDA%20Pro-8.x--9.3-orange)](https://hex-rays.com/ida-pro/)
 [![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 
 <p align="center">
@@ -25,11 +25,21 @@ This is an IDAPython port of Washi's excellent Ghidra plugin
 
 | IDA Version | Qt | Python Qt Bindings | Plugin Support |
 |---|---|---|---|
-| **8.x — 9.1** | Qt5 | PyQt5 | **❌ Not supported** |
+| **8.x — 9.1** | Qt5 | PyQt5 | **✅ Supported** (requires `pip install PyQt5` in IDA's Python) |
 | **9.2+** | Qt6 | PySide6 | **✅ Supported** (developed & tested on **9.3**) |
 
-The plugin's UI is **PySide6-only**, the Qt binding IDA adopted in **9.2**. x86-64 little-endian
-targets only (as upstream). The Hex-Rays decompiler is optional but recommended.
+x86-64 little-endian targets only (as upstream). The Hex-Rays decompiler is optional but recommended.
+
+The plugin auto-detects the Qt binding at runtime via `qt_compat.py`: it prefers PySide6
+on IDA 9.2+ and falls back to PyQt5 on IDA 8.x–9.1. On the older branches you must install
+PyQt5 into IDA's bundled Python first (IDA does not ship it):
+
+```
+<IDA_DIR>\python311\python.exe -m pip install PyQt5==5.15.11 PyQt5-Qt5==5.15.2 PyQt5-sip==12.15.0
+```
+
+The analysis engine (`ida-nativeaot.py`) has no Qt dependency and also runs headless under
+`idalib` / `idat64 -A -S"ida-nativeaot.py" target.i64` on every supported IDA.
 
 ---
 
@@ -87,33 +97,46 @@ method names are shown in full and demangled, mirroring any symbols already appl
 
 ## Installation
 
-Copy **both** files into your IDA plugins directory (they must sit together — the plugin loads the
-engine from the same folder):
+Copy **all three** files into your IDA plugins directory (they must sit together — the plugin loads
+the engine and Qt-compat shim from the same folder):
 
 **Per-user (recommended — survives IDA reinstalls):**
 ```
 %APPDATA%\Hex-Rays\IDA Pro\plugins\ida-nativeaot_browser.py
 %APPDATA%\Hex-Rays\IDA Pro\plugins\ida-nativeaot.py
+%APPDATA%\Hex-Rays\IDA Pro\plugins\qt_compat.py
 ```
 
 **System-wide:**
 ```
 <IDA_DIR>\plugins\ida-nativeaot_browser.py
 <IDA_DIR>\plugins\ida-nativeaot.py
+<IDA_DIR>\plugins\qt_compat.py
 ```
 
 Restart IDA, then open via **`Edit → Plugins → NativeAOT Metadata Browser`** or **`Ctrl-Shift-N`**.
 The first run analyzes and caches the metadata into the IDB; subsequent opens are instant.
 
 > `ida-nativeaot.py` is the analysis engine and can also be run standalone, without the GUI, via
-> **`File → Script file…`** or headless: `idat64 -A -S"ida-nativeaot.py" target.i64`.
+> **`File → Script file…`** or headless: `idat64 -A -S"ida-nativeaot.py" target.i64`. It has no Qt
+> dependency and runs on every supported IDA.
+
+### IDA 8.x — 9.1 (PyQt5) prerequisites
+
+IDA versions before 9.2 do not ship PyQt5. Install it into IDA's bundled Python once:
+
+```
+<IDA_DIR>\python311\python.exe -m pip install PyQt5==5.15.11 PyQt5-Qt5==5.15.2 PyQt5-sip==12.15.0
+```
+
+After that, the plugin works identically — `qt_compat.py` selects PyQt5 transparently.
 
 ### IDA Plugin Manager (HCLI)
 
-The plugin ships an `ida-plugin.json`. This is a two-file plugin - `ida-nativeaot_browser.py` is the
-`entryPoint` and `ida-nativeaot.py` is a helper module it imports - and the Plugin Manager installs
-**both** files together (it extracts the whole plugin directory, not just the entry point). Once
-published to plugins.hex-rays.com, install with:
+The plugin ships an `ida-plugin.json`. The Plugin Manager installs the whole plugin directory,
+which includes `ida-nativeaot_browser.py` (the `entryPoint`), `ida-nativeaot.py` (the analysis
+engine), and `qt_compat.py` (the Qt5/Qt6 compatibility shim). Once published to
+plugins.hex-rays.com, install with:
 
 ```
 hcli plugin install ida-nativeaot

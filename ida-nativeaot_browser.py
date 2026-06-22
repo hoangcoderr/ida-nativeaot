@@ -337,11 +337,11 @@ class BrowserData:
 
 def _import_qt():
     try:
-        from PySide6 import QtWidgets, QtCore, QtGui
+        from qt_compat import QtWidgets, QtCore, QtGui
         return QtWidgets, QtCore, QtGui
     except Exception as ex:
         raise RuntimeError(
-            "PySide6 is required and is only available in the GUI version of "
+            "PySide6/PyQt5 is required and is only available in the GUI version of "
             "IDA (not idalib). Error: %s" % ex)
 
 

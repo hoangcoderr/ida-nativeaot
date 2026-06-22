@@ -3,10 +3,10 @@
   "plugin": {
     "name": "ida-nativeaot",
     "entryPoint": "ida-nativeaot_browser.py",
-    "version": "1.0.2",
-    "description": "Reconstructs .NET Native AOT (.NET 7/8/9/10) metadata in symbol-stripped binaries: rehydrates the runtime metadata, rebuilds the MethodTable/EEType type hierarchy, names virtual methods, and annotates frozen string literals — then presents it all in a navigable PySide6 metadata browser. IDAPython port of washi1337/ghidra-nativeaot. Requires IDA Pro 9.2+ (PySide6).",
+    "version": "1.0.3",
+    "description": "Reconstructs .NET Native AOT (.NET 7/8/9/10) metadata in symbol-stripped binaries: rehydrates the runtime metadata, rebuilds the MethodTable/EEType type hierarchy, names virtual methods, and annotates frozen string literals — then presents it all in a navigable PySide6/PyQt5 metadata browser. IDAPython port of washi1337/ghidra-nativeaot. Supports IDA Pro 8.x-9.1 (PyQt5, requires pip install) and IDA Pro 9.2+ (PySide6, bundled).",
     "license": "MIT",
-    "idaVersions": ">=9.2",
+    "idaVersions": ">=8.0",
     "categories": [
       "malware-analysis",
       "ui-ux-and-visualization",
@@ -36,8 +36,12 @@
       "decompiler",
       "frozen-objects",
       "ghidra-port",
+      "ida-8",
       "ida-9",
-      "pyside6"
+      "pyside6",
+      "pyqt5",
+      "qt5",
+      "qt6"
     ]
   }
 }
